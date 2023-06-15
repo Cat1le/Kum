@@ -1,4 +1,5 @@
-﻿using System.Globalization;
+﻿using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -68,10 +69,14 @@ partial class Parser
                         TokenType.Number
                     ));
                 }
-                else if (IsString(slice))
+                else if (TryGetOperator(slice, out var op, out var opLen))
                 {
-                    str = GetString(slice, location);
-                    i += str.Length;
+                    i += opLen + 1;
+                    result.Add(new(op, TokenType.Operator));
+                }
+                else if (TryGetString(slice, location, out str, out var strLen))
+                {
+                    i += strLen + 1;
                     result.Add(new(str, TokenType.String));
                 }
                 else if (IsLineBreak(slice))
@@ -82,29 +87,93 @@ partial class Parser
                 }
                 else
                 {
-                    throw new ParserException($"Unknown symbol, tokens: {string.Join(", ", result)}", location);
+                    throw new ParserException($"Unknown symbol '{slice[0]}'", location);
                 }
             }
-            i += slice.IndexOfAnyExcept(Space);
+            i += Math.Max(slice.IndexOfAnyExcept(Space), 0);
         }
         return result;
     }
 
-    [GeneratedRegex("^[а-я]+")]
+    [GeneratedRegex("^[a-zа-я]+", RegexOptions.IgnoreCase)]
     private partial Regex IdentRegex();
 
     [GeneratedRegex("^[0-9]+(\\.[0-9]+)?")]
     private partial Regex NumberRegex();
 
-    private bool IsString(ReadOnlySpan<char> code)
+    private bool TryGetOperator(ReadOnlySpan<char> code, out Operator? op, out int length)
     {
-        return code[0] == Quote;
+        length = 2;
+        switch (code[..2])
+        {
+            case "+=":
+                op = Operator.AddAssign;
+                return true;
+            case "-=":
+                op = Operator.SubAssign;
+                return true;
+            case "*=":
+                op = Operator.MulAssign;
+                return true;
+            case "/=":
+                op = Operator.DivAssign;
+                return true;
+        }
+        length = 1;
+        switch (code[0])
+        {
+            case '+':
+                op = Operator.Add;
+                return true;
+            case '-':
+                op = Operator.Sub;
+                return true;
+            case '*':
+                op = Operator.Mul;
+                return true;
+            case '/':
+                op = Operator.Div;
+                return true;
+            default:
+                op = null;
+                length = -1;
+                return false;
+        }
     }
 
-    private string GetString(ReadOnlySpan<char> code, Location location)
+    private bool TryGetString(ReadOnlySpan<char> code, Location location, [NotNullWhen(true)] out string? value, out int length)
     {
+        static int P(ReadOnlySpan<char> chars, StringBuilder sb)
+        {
+            var seen = false;
+            foreach (var c in chars)
+            {
+                if (c == BackSlash)
+                {
+                    if (seen)
+                    {
+                        sb.Append(c);
+                    }
+                    seen = !seen;
+                }
+                else
+                {
+                    sb.Append(c);
+                    seen = false;
+                }
+            }
+            return chars.Length;
+        }
+
+        if (code[0] != Quote)
+        {
+            value = null;
+            length = -1;
+            return false;
+        }
         var sb = new StringBuilder(Quote.ToString());
         var next = code[1..];
+        length = 0;
         while (true)
         {
             var idx = next.IndexOfAny(Quote, Break);
@@ -117,7 +186,7 @@ partial class Parser
                 );
             }
             var backSlashes = 0;
-            for (var i = idx; i >= 0; i--)
+            for (var i = idx - 1; i >= 0; i--)
             {
                 if (next[i] == BackSlash) backSlashes++;
                 else break;
@@ -127,8 +196,9 @@ partial class Parser
                 switch (next[idx])
                 {
                     case Quote:
-                        sb.Append(next[..(idx + 1)]);
-                        return sb.ToString();
+                        length += P(next[..(idx + 1)], sb);
+                        value = sb.ToString();
+                        return true;
                     case Break:
                         throw new ParserException(
                             "String is terminated by line-break instead closing quote",
@@ -138,7 +208,7 @@ partial class Parser
             }
             else
             {
-                sb.Append(next[..(idx + 1)]);
+                length += P(next[..(idx + 1)], sb);
                 next = next[(idx + 1)..];
             }
         }

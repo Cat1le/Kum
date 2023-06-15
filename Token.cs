@@ -4,8 +4,21 @@ enum TokenType
 {
     Ident,
     Number,
+    Operator,
     String,
     LineBreak
+}
+
+enum Operator
+{
+    Add,
+    Sub,
+    Mul,
+    Div,
+    AddAssign,
+    SubAssign,
+    MulAssign,
+    DivAssign
 }
 
 class Token
